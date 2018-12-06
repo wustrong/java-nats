@@ -19,7 +19,7 @@ package nats;
 import java.util.concurrent.TimeUnit;
 
 /**
- * @author Mike Heath <elcapo@gmail.com>
+ * @author Mike Heath
  */
 public final class Constants {
 
@@ -27,6 +27,14 @@ public final class Constants {
 	 * The default host to look for a Nats server, localhost, naturally.
 	 */
 	public static final String DEFAULT_HOST = "localhost";
+	/**
+	 * The default time duration the connection to the NATS server may be idle.
+	 */
+	public static final long DEFAULT_IDLE_TIMEOUT = TimeUnit.SECONDS.toMillis(30);
+	/**
+	 * The default time between Nats ping requests.
+	 */
+	public static final long DEFAULT_PING_INTERVAL = TimeUnit.SECONDS.toMillis(15);
 	/**
 	 * The default Nats port, 4222.
 	 */

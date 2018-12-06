@@ -32,6 +32,7 @@ import nats.NatsException;
 import nats.codec.AbstractClientInboundMessageHandlerAdapter;
 import nats.codec.ClientConnectFrame;
 import nats.codec.ClientFrameEncoder;
+import nats.codec.ClientPingFrame;
 import nats.codec.ClientPublishFrame;
 import nats.codec.ClientSubscribeFrame;
 import nats.codec.ClientUnsubscribeFrame;
@@ -60,7 +61,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * @author Mike Heath <elcapo@gmail.com>
+ * @author Mike Heath
  */
 class NatsImpl implements Nats {
 
@@ -86,9 +87,11 @@ class NatsImpl implements Nats {
 
 	// Configuration values
 	private final boolean automaticReconnect;
+	private final long idleTimeout;
 	private final long reconnectTimeWait;
 	private final boolean pedantic;
 	private final int maxFrameSize;
+	private final long pingInterval;
 
 	private final ServerList serverList = new ServerList();
 
@@ -138,9 +141,11 @@ class NatsImpl implements Nats {
 
 		// Set parameters
 		automaticReconnect = connector.automaticReconnect;
+		idleTimeout = connector.idleTimeout;
 		reconnectTimeWait = connector.reconnectWaitTime;
 		pedantic = connector.pedantic;
 		maxFrameSize = connector.maxFrameSize;
+		pingInterval = connector.pingInterval;
 
 		listeners.addAll(connector.listeners);
 
@@ -170,9 +175,8 @@ class NatsImpl implements Nats {
 					LOGGER.info("Connection to {} successful", server.getAddress());
 					server.connectionSuccess();
 					synchronized (lock) {
-						channel = future.channel();
 						if (closed) {
-							channel.close();
+							future.channel().close();
 						}
 					}
 				} else {
@@ -457,8 +461,13 @@ class NatsImpl implements Nats {
 			pipeline.addLast("decoder", new ServerFrameDecoder(maxFrameSize));
 			pipeline.addLast("encoder", new ClientFrameEncoder());
 			pipeline.addLast("handler", new AbstractClientInboundMessageHandlerAdapter() {
+
+				private ScheduledFuture<?> idleCheckScheduledFuture;
+				private ScheduledFuture<?> pingScheduledFuture;
+
 				@Override
 				protected void publishedMessage(ChannelHandlerContext context, ServerPublishFrame frame) {
+					resetIdleCheck(context.channel());
 					final NatsSubscription subscription;
 					synchronized (lock) {
 						subscription = subscriptions.get(frame.getId());
@@ -472,31 +481,37 @@ class NatsImpl implements Nats {
 
 				@Override
 				protected void pongResponse(ChannelHandlerContext context, ServerPongFrame pongFrame) {
-					// Ignore
+					resetIdleCheck(context.channel());
 				}
 
 				@Override
 				protected void serverInfo(ChannelHandlerContext context, ServerInfoFrame infoFrame) {
 					// TODO Parse info body for alternative servers to connect to as soon as NATS' clustering support starts sending this.
 					final ServerList.Server server = serverList.getCurrentServer();
-					final Channel channel = context.channel();
-					channel.writeAndFlush(new ClientConnectFrame(new ConnectBody(server.getUser(), server.getPassword(), pedantic, false))).addListener(new ChannelFutureListener() {
+					context.channel().writeAndFlush(new ClientConnectFrame(new ConnectBody(server.getUser(), server.getPassword(), pedantic, false))).addListener(new ChannelFutureListener() {
 						@Override
 						public void operationComplete(ChannelFuture future) throws Exception {
 							LOGGER.debug("Server ready");
+							final Channel channel = future.channel();
 							synchronized (lock) {
+								NatsImpl.this.channel = channel;
 								serverReady = true;
 								// Resubscribe when the channel opens.
 								for (NatsSubscription subscription : subscriptions.values()) {
 									writeSubscription(subscription);
 								}
 								// Resend pending publish commands.
-								final Channel channel = future.channel();
 								for (ClientPublishFrame publish : publishQueue) {
 									channel.write(publish);
 								}
 								channel.flush();
 							}
+							pingScheduledFuture = channel.eventLoop().scheduleAtFixedRate(new Runnable() {
+								@Override
+								public void run() {
+									channel.writeAndFlush(ClientPingFrame.PING);
+								}
+							}, pingInterval, pingInterval, TimeUnit.MILLISECONDS);
 							fireStateChange(ConnectionStateListener.State.SERVER_READY);
 						}
 					});
@@ -513,14 +528,18 @@ class NatsImpl implements Nats {
 				}
 
 				@Override
-				public void channelActive(ChannelHandlerContext ctx) throws Exception {
+				public void channelActive(final ChannelHandlerContext context) throws Exception {
 					fireStateChange(ConnectionStateListener.State.CONNECTED);
+					resetIdleCheck(context.channel());
 				}
 
 				@Override
 				public void channelInactive(ChannelHandlerContext ctx) throws Exception {
 					synchronized (lock) {
 						serverReady = false;
+					}
+					if (pingScheduledFuture != null) {
+						pingScheduledFuture.cancel(true);
 					}
 					fireStateChange(ConnectionStateListener.State.DISCONNECTED);
 					scheduleReconnect();
@@ -530,6 +549,20 @@ class NatsImpl implements Nats {
 				public void exceptionCaught(ChannelHandlerContext context, Throwable cause) throws Exception {
 					LOGGER.error("Error", cause);
 				}
+
+				private void resetIdleCheck(final Channel channel) {
+					if (idleCheckScheduledFuture != null) {
+						idleCheckScheduledFuture.cancel(true);
+					}
+					idleCheckScheduledFuture = channel.eventLoop().schedule(new Runnable() {
+						@Override
+						public void run() {
+							LOGGER.warn("Connection to NATS server has gone idle");
+							channel.close();
+						}
+					}, idleTimeout, TimeUnit.MILLISECONDS);
+				}
+
 			});
 		}
 	}

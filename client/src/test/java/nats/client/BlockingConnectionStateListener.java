@@ -1,12 +1,12 @@
 package nats.client;
 
-import junit.framework.Assert;
-
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
+import org.testng.Assert;
+
 /**
- * @author Mike Heath <elcapo@gmail.com>
+ * @author Mike Heath
  */
 public class BlockingConnectionStateListener implements ConnectionStateListener {
 

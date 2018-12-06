@@ -28,7 +28,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 
 /**
- * @author Mike Heath <elcapo@gmail.com>
+ * @author Mike Heath
  */
 public class NatsConnector {
 	List<URI> hosts = new ArrayList<>();
@@ -38,6 +38,8 @@ public class NatsConnector {
 	EventLoopGroup eventLoopGroup;
 	int maxFrameSize = Constants.DEFAULT_MAX_FRAME_SIZE;
 	final List<ConnectionStateListener> listeners = new ArrayList<>();
+	long idleTimeout = Constants.DEFAULT_IDLE_TIMEOUT;
+	long pingInterval = Constants.DEFAULT_PING_INTERVAL;
 
 	/**
 	 * Executor to use for invoking callbacks. By default the current thread, usually a Netty IO thread, is used to
@@ -104,6 +106,30 @@ public class NatsConnector {
 	}
 
 	/**
+	 * Specifies the time between sending ping requests to the Nats server.
+	 *
+	 * @param pingInterval the time between ping packets in milliseconds.
+	 * @return this connector.
+	 */
+	public NatsConnector pingInterval(long pingInterval) {
+		this.pingInterval = pingInterval;
+		return this;
+	}
+
+	/**
+	 *  Specifies the time duration the connection to the NATS server may be idle before the client closes the
+	 *  connection.
+	 *
+	 *  @param idleTimeout time duration the connection to the NATS server may be idle before the client closes the
+	 *  connection
+	 * @return this connector.
+	 */
+	public NatsConnector idleTimeout(long idleTimeout) {
+		this.idleTimeout = idleTimeout;
+		return this;
+	}
+
+	/**
 	 * Specifies the amount of time to wait between connection attempts. This is only used when automatic
 	 * reconnect is enabled.
 	 *
@@ -119,7 +145,7 @@ public class NatsConnector {
 	/**
 	 * Indicates whether the server should do extra checking, mostly around properly formed subjects.
 	 *
-	 * @param pedantic
+	 * @param pedantic indicates whether the server should do extra checking, mostly around properly formed subjects
 	 * @return this connector.
 	 */
 	public NatsConnector pedantic(boolean pedantic) {
